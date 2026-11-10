@@ -6,6 +6,8 @@ Windows-style **edge motion** for macOS trackpads: when your finger slides into 
 
 Built for a ThinkPad hackintosh (VoodooI2C + VoodooInput), but it works with any trackpad macOS sees as multitouch, including real Mac trackpads.
 
+<p align="center"><img src="docs/panel.png" width="300" alt="Edge Motion menu bar panel"></p>
+
 ## Features
 
 - Menu bar app with a small settings panel
