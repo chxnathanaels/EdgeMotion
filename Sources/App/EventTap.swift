@@ -53,6 +53,7 @@ final class EventTap {
         CFRunLoopAddSource(CFRunLoopGetCurrent(), src, .commonModes)
         CGEvent.tapEnable(tap: port, enable: true)
         running = true
+        DispatchQueue.main.async { AppState.shared?.tapStarted() }
         CFRunLoopRun()
     }
 

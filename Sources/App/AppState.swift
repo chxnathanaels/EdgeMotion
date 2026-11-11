@@ -72,6 +72,7 @@ final class AppState: ObservableObject {
     let tap = EventTap()
     let brightness = BrightnessController()
     private var pollTimer: Timer?
+    private var tapWasRunning = false
 
     var preset: CurvePreset {
         for p in CurvePreset.allCases {
@@ -113,6 +114,7 @@ final class AppState: ObservableObject {
             let t = AXIsProcessTrusted()
             if t != self.trusted { self.trusted = t }
             if t && !self.tap.running { self.tap.start() }
+            if self.tap.running != self.tapWasRunning { self.tapWasRunning = self.tap.running; self.apply() }
         }
     }
 
@@ -122,7 +124,8 @@ final class AppState: ObservableObject {
         var c = EMConfig()
         em_get_default_config(&c)
         c.enabled = enabled ? 1 : 0
-        c.pointerTakeover = pointerTakeover ? 1 : 0
+        // only take over once the event tap can hide macOS's own pointer motion
+        c.pointerTakeover = (pointerTakeover && tap.running) ? 1 : 0
         c.speed = Float(speed)
         c.precFloor = Float(precFloor); c.precZone = Float(precZone)
         c.threshold = Float(threshold); c.incline = Float(incline); c.capMul = Float(capMul)
@@ -162,6 +165,8 @@ final class AppState: ObservableObject {
         save()
         apply()
     }
+
+    func tapStarted() { tapWasRunning = true; apply() }
 
     func handleTap(_ fingers: Int) {
         guard enabled else { return }
