@@ -17,7 +17,7 @@ BINS=()
 for arch in $ARCHS; do
   clang -O2 -Wall -arch $arch -mmacosx-version-min=13.0 -c Sources/engine.c -o $OUT/obj/engine-$arch.o
   swiftc -O -parse-as-library -target $arch-apple-macos13.0 \
-    -import-objc-header Sources/engine.h Sources/EdgeMotionApp.swift $OUT/obj/engine-$arch.o \
+    -import-objc-header Sources/engine.h Sources/App/*.swift Sources/Views/*.swift $OUT/obj/engine-$arch.o \
     -framework SwiftUI -framework AppKit -framework ApplicationServices -framework ServiceManagement \
     -o $OUT/obj/EdgeMotion-$arch
   BINS+=($OUT/obj/EdgeMotion-$arch)
