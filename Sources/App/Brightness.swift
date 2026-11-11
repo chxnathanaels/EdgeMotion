@@ -50,7 +50,7 @@ final class BrightnessController {
         return CGMainDisplayID()
     }
 
-    func get() -> Float? {
+    func readLevel() -> Float? {
         var v: Float = 0
         if let g = dsGet, g(display, &v) == 0 { return v }
         if let g = ioGet, ioService != 0, g(ioService, 0, "brightness" as CFString, &v) == 0 { return v }
@@ -62,11 +62,11 @@ final class BrightnessController {
         if let s = ioSet, ioService != 0 { _ = s(ioService, 0, "brightness" as CFString, v) }
     }
 
-    var available: Bool { get() != nil }
+    var available: Bool { readLevel() != nil }
 
     /// Called on the main thread for each brightness key press (and auto-repeat).
     func step(up: Bool) {
-        guard let current = get() else { return }
+        guard let current = readLevel() else { return }
         let step: Float = fineSteps ? 1.0 / 32.0 : 1.0 / 16.0
         let base = target ?? current
         var t = (base / step).rounded() * step + (up ? step : -step)
