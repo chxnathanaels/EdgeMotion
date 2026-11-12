@@ -59,6 +59,7 @@ final class EventTap {
 
     fileprivate func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            em_note_external_motion()
             if let t = tap { CGEvent.tapEnable(tap: t, enable: true) }
             return Unmanaged.passUnretained(event)
         }
@@ -69,6 +70,7 @@ final class EventTap {
         switch type.rawValue {
         case 5, 6, 7, 27:                                 // pointer motion
             if em_should_suppress_system_motion() != 0 { return nil }
+            em_note_external_motion()                     // macOS / trackpoint / mouse moved it: re-sync our position
             return Unmanaged.passUnretained(event)
 
         case 14:                                          // NX_SYSDEFINED (media / brightness keys)

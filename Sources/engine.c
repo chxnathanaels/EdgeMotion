@@ -51,6 +51,8 @@ static int  (*pMTDeviceGetSensorSurfaceDimensions)(MTDeviceRef, int *, int *);
 
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
 static EMConfig C;
+static volatile double lastFrameT = 0;   // last touch frame (own clock)
+static volatile int gSupEnabled = 0;     // pointer takeover on
 static EMTapCallback gTapCB;
 static float padW = 100.0f, padH = 60.0f;   // mm
 
@@ -111,16 +113,33 @@ void em_set_config(const EMConfig *c) {
     C.capMul = clampf(C.capMul, 1.0f, 10.0f);
     C.edgeZonePct = clampf(C.edgeZonePct, 2, 25);
     C.edgeSpeed = clampf(C.edgeSpeed, 1, 40);
+    gSupEnabled = C.enabled && C.pointerTakeover;
     pthread_mutex_unlock(&mu);
 }
 
 // ---------- posting ----------
+// The pointer position EdgeMotion moves is tracked here instead of being read back from the system before every
+// move: under load, queued events make the system's current location stale, and adding deltas to a stale point
+// made the cursor oscillate around one spot. All moves (touch handler + edge-motion timer) go through this one
+// lock-protected position. It is re-synced from the real cursor when EdgeMotion hasn't moved it for a while or when
+// something else moved it (trackpoint, mouse: see em_note_external_motion).
+static pthread_mutex_t postMu = PTHREAD_MUTEX_INITIALIZER;
+static double curX, curY, lastPostT = 0;
+static volatile int curValid = 0;
+#define RESYNC_AFTER_S 0.20
+
 static void postMove(float dx, float dy) {
-    CGEventRef q = CGEventCreate(NULL);
-    if (!q) return;
-    CGPoint old = CGEventGetLocation(q);
-    CFRelease(q);
-    CGPoint p = CGPointMake(old.x + dx, old.y + dy);
+    pthread_mutex_lock(&postMu);
+    double now = nowS();
+    if (!curValid || now - lastPostT > RESYNC_AFTER_S) {
+        CGEventRef q = CGEventCreate(NULL);
+        if (!q) { pthread_mutex_unlock(&postMu); return; }
+        CGPoint real = CGEventGetLocation(q);
+        CFRelease(q);
+        curX = real.x; curY = real.y; curValid = 1;
+    }
+    CGPoint old = CGPointMake(curX, curY);
+    CGPoint p = CGPointMake(curX + dx, curY + dy);
 
     CGDirectDisplayID d; uint32_t cnt = 0;
     CGGetDisplaysWithPoint(p, 1, &d, &cnt);
@@ -130,16 +149,21 @@ static void postMove(float dx, float dy) {
         p.x = fmax(b.origin.x, fmin(p.x, b.origin.x + b.size.width - 1));
         p.y = fmax(b.origin.y, fmin(p.y, b.origin.y + b.size.height - 1));
     }
+    curX = p.x; curY = p.y; lastPostT = now;
     int btn = leftDown();
     CGEventRef e = CGEventCreateMouseEvent(NULL, btn ? kCGEventLeftMouseDragged : kCGEventMouseMoved,
-                                           p, kCGMouseButtonLeft);
-    if (!e) return;
-    CGEventSetIntegerValueField(e, kCGMouseEventDeltaX, (int64_t)lround(p.x - old.x));
-    CGEventSetIntegerValueField(e, kCGMouseEventDeltaY, (int64_t)lround(p.y - old.y));
-    CGEventSetIntegerValueField(e, kCGEventSourceUserData, EM_MAGIC);
-    CGEventPost(kCGHIDEventTap, e);
-    CFRelease(e);
+                                           CGPointMake(round(p.x), round(p.y)), kCGMouseButtonLeft);
+    if (e) {
+        CGEventSetIntegerValueField(e, kCGMouseEventDeltaX, (int64_t)lround(p.x - old.x));
+        CGEventSetIntegerValueField(e, kCGMouseEventDeltaY, (int64_t)lround(p.y - old.y));
+        CGEventSetIntegerValueField(e, kCGEventSourceUserData, EM_MAGIC);
+        CGEventPost(kCGHIDEventTap, e);
+        CFRelease(e);
+    }
+    pthread_mutex_unlock(&postMu);
 }
+
+void em_note_external_motion(void) { curValid = 0; }
 
 // ---------- touch records ----------
 typedef struct {
@@ -160,8 +184,8 @@ static int clicker = -1, prevBtn = 0;
 static int driver = -1, dHave = 0;
 static float dPrevX, dPrevY;
 static double vEMA = 0, lastFactor = 0, lastTs = 0;
-static double drvSeenAt = 0, drvMovedAt = 0;   // own clock
-static int btnHeld = 0;
+static volatile double drvSeenAt = 0, drvMovedAt = 0;   // own clock
+static volatile int btnHeld = 0;
 
 // edge state
 static int dirX, dirY, ticks, edgeTrack = -1000, edgeStable = 0, edgeCount = 0;
@@ -200,6 +224,8 @@ static int contactCallback(MTDeviceRef dev, MTTouch *t, int n, double ts, int fr
     float postX = 0, postY = 0; int doPost = 0;
 
     pthread_mutex_lock(&mu);
+    lastFrameT = now;
+    gSupEnabled = C.enabled && C.pointerTakeover;
     if (!C.enabled) {
         nT = 0; edgeReset(); dHave = 0; driver = -1; sessActive = 0; clicker = -1;
         pthread_mutex_unlock(&mu);
@@ -358,12 +384,11 @@ static int contactCallback(MTDeviceRef dev, MTTouch *t, int n, double ts, int fr
 }
 
 int em_should_suppress_system_motion(void) {
-    pthread_mutex_lock(&mu);
+    // Called from the event tap for every pointer event: must never wait on the engine lock (a slow tap gets disabled
+    // by macOS, and then both macOS and EdgeMotion move the cursor). Reads are racy on purpose; worst case one event.
     double now = nowS();
-    int r = C.enabled && C.pointerTakeover && (now - drvSeenAt < 0.06) &&
-            ((now - drvMovedAt < 0.25) || btnHeld);
-    pthread_mutex_unlock(&mu);
-    return r;
+    if (now - lastFrameT > 0.10) return 0;           // no fresh touch frames: never hold the pointer hostage
+    return gSupEnabled && (now - drvSeenAt < 0.06) && ((now - drvMovedAt < 0.25) || btnHeld);
 }
 
 static void *tickThread(void *arg) {
@@ -372,6 +397,7 @@ static void *tickThread(void *arg) {
         usleep(10000);
         float mx = 0, my = 0;
         pthread_mutex_lock(&mu);
+        if ((dirX || dirY) && nowS() - lastFrameT > 0.15) edgeStop();   // touch frames stopped: never keep pushing
         if (C.enabled && C.edgeEnabled && (dirX || dirY)) {
             float ramp = 0.4f + 0.6f * (ticks < 60 ? ticks : 60) / 60.0f;
             if (dirX) mx = dirX * C.edgeSpeed * ramp * (0.5f + 0.5f * depthX);

@@ -42,5 +42,6 @@ double em_curve_factor(const EMConfig *c, double speedMMs); // for drawing the c
 double em_points_per_mm(void);                 // base gain (points per mm at factor 1)
 void   em_pad_size(float *wMM, float *hMM);    // physical trackpad size
 long   em_magic(void);                         // marker on events EdgeMotion posts
+void   em_note_external_motion(void);          // something else moved the pointer: re-sync before the next move
 
 #endif
