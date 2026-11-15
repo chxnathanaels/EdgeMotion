@@ -14,6 +14,7 @@ final class LauncherController: NSObject, ObservableObject, NSWindowDelegate {
     @Published var page: Int? = 0
     @Published var pageCount = 1
     @Published var shown = false
+    @Published var insets = NSEdgeInsets()
     @Published var focusTick = 0
 
     let store: AppStore
@@ -46,7 +47,8 @@ final class LauncherController: NSObject, ObservableObject, NSWindowDelegate {
         w.isOpaque = false
         w.backgroundColor = .clear
         w.hasShadow = false
-        w.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 1)
+        // One level below the Dock: the Dock stays visible and clickable on top, so apps can be dragged onto it.
+        w.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.dockWindow)) - 1)
         w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         w.isReleasedWhenClosed = false
         w.delegate = self
@@ -105,7 +107,16 @@ final class LauncherController: NSObject, ObservableObject, NSWindowDelegate {
         visible = true; hiding = false
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
-        if let f = screen?.frame { window.setFrame(f, display: false) }
+        if let scr = screen {
+            let f = scr.frame, v = scr.visibleFrame
+            window.setFrame(f, display: false)
+            // Keep the grid out of the Dock's area (Dock on bottom, left or right; auto-hide gives 0).
+            insets = NSEdgeInsets(top: 0,
+                                  left: v.minX - f.minX,
+                                  bottom: v.minY - f.minY,
+                                  right: f.maxX - v.maxX)
+        }
+        NSApp.presentationOptions = [.autoHideMenuBar]
         updateResults()
         NSApp.activate(ignoringOtherApps: true)
         window.alphaValue = animate ? 0 : 1
@@ -130,6 +141,7 @@ final class LauncherController: NSObject, ObservableObject, NSWindowDelegate {
         let finish = { [weak self] in
             guard let self = self else { return }
             self.window.orderOut(nil)
+            NSApp.presentationOptions = []
             self.visible = false; self.hiding = false
             self.query = ""; self.selection = nil
             if self.settingsWindow?.isVisible != true { NSApp.hide(nil) }
@@ -150,7 +162,18 @@ final class LauncherController: NSObject, ObservableObject, NSWindowDelegate {
     func hideThen(_ action: @escaping () -> Void) { hide(completion: action) }
 
     func windowDidResignKey(_ notification: Notification) {
-        if visible && settingsWindow?.isKeyWindow != true { hide() }
+        if visible && !dragging && settingsWindow?.isKeyWindow != true { hide() }
+    }
+
+    /// While an icon is being dragged, don't auto-close. Clear the flag once the mouse button is up.
+    var dragging = false
+    func watchDragEnd() {
+        if NSEvent.pressedMouseButtons & 1 != 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in self?.watchDragEnd() }
+        } else {
+            dragging = false
+            if visible { NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil) }
+        }
     }
 
     // MARK: actions

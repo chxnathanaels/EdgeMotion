@@ -26,6 +26,9 @@ struct LauncherView: View {
                     .padding(.bottom, 26)
             }
             .padding(.horizontal, 70)
+            .padding(.leading, c.insets.left)
+            .padding(.trailing, c.insets.right)
+            .padding(.bottom, c.insets.bottom)
         }
         .scaleEffect(c.shown ? 1 : 1.06)
         .opacity(c.shown ? 1 : 0)
@@ -177,6 +180,14 @@ struct AppCell: View {
             .fill(.white.opacity(selected ? 0.2 : 0)))
         .contentShape(Rectangle())
         .onTapGesture { c.launch(item) }
+        // Drag an app out of the grid (onto the Dock, a Finder window, etc.). The launcher stays open.
+        .onDrag {
+            c.dragging = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { c.watchDragEnd() }
+            return NSItemProvider(object: item.url as NSURL)
+        } preview: {
+            Image(nsImage: store.icon(for: item)).resizable().frame(width: iconSize, height: iconSize)
+        }
         .contextMenu {
             Button("Open") { c.launch(item) }
             Button("Show in Finder") { c.hideThen { NSWorkspace.shared.activateFileViewerSelecting([item.url]) } }
